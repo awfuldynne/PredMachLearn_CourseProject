@@ -1,0 +1,154 @@
+---
+title: "Predicting Quality of Exercise Performance Based on Accelerometer Data"
+author: "Sean Miller"
+date: "Tuesday, November 17, 2015"
+output: html_document
+---
+
+## Introduction
+
+The goal of this exploration is to see how well we can predict the quality 
+of how an exercise is performed by looking at accelerometer data.  According to
+the [Human Activity Recognition](http://groupware.les.inf.puc-rio.br/har#dataset)
+project from Groupware, six males aged 20-28 performed different exercises at five
+different quality levels.  Class A indicates ideal execution while classes B through
+E indicate common mistakes that occur when the exercise is performed.
+
+```{r, warning=FALSE, error=FALSE, message=FALSE, echo=FALSE}
+if (!require(caret))
+{
+    install.packages("caret")
+    require(caret)
+}
+```
+
+## Data Cleaning
+
+[Training Data](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv)  
+[Test Data](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv)
+
+```{r, echo=FALSE}
+## If either file is missing, download both to make sure they are up to date
+if (!file.exists("pml-training.csv") || !file.exists("pml-testing.csv"))
+{
+    download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", destfile = "pml-training.csv")
+    download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", destfile = "pml-testing.csv")
+}
+```
+
+Our first objective after downloading the data to our local machine is to read it in
+and see how we can clean it up.  We have 160 columns and using head() to examine
+the first 6 rows of the data immediately we notice a few things.  The first column
+appears to be the row index and the third through fifth column appear to be timestamps.
+As we'll be looking at this data as different instants in time, we won't need that data.
+
+```{r}
+train_raw = read.csv("pml-training.csv", na.strings=c("","NA"))
+test_raw = read.csv("pml-testing.csv", na.strings=c("","NA"))
+dim(train_raw)
+```
+
+```{r}
+head(train_raw[,1:5])
+```
+
+```{r, echo=FALSE}
+train_raw = train_raw[,c(2,6:ncol(train_raw))]
+test_raw = test_raw[,c(2,6:ncol(test_raw))]
+```
+
+Another thing we immediately noticed was that a good deal of columns are filled with NAs.
+Looking at the data with View() allows us to see that every time the column new_window is 
+"yes", columns that are normally NA are filled out.  From the [paper](http://groupware.les.inf.puc-rio.br/public/papers/2013.Velloso.QAR-WLE.pdf)
+provided by the researchers that gathered this data we can see that while we
+are using this data to use each instant to predict the quality of the exercise, 
+they had used time windows to predict the type of activity performed.  We can disregard
+this data as it is measuring the kurtosis and skewness of the data in a given time window.
+
+```{r, echo=FALSE}
+## Remove columns with NAs
+train_raw = train_raw[,colSums(is.na(train_raw)) == 0]
+test_raw = test_raw[,colSums(is.na(test_raw)) == 0]
+
+## Remove time series columns
+train_raw = train_raw[,c(1,4:ncol(train_raw))]
+test_raw = test_raw[,c(1,4:ncol(test_raw))]
+
+## Find columns that are highly correlated with others and remove them
+numeric_train = train_raw[sapply(train_raw, is.numeric)]
+corMatrix = cor(numeric_train)
+highCorr = findCorrelation(corMatrix)
+col_to_remove = which(names(train_raw) %in% names(numeric_train)[highCorr])
+
+train= train_raw[,-col_to_remove]
+test = test_raw[,-col_to_remove]
+```
+
+## Model Selection
+
+Now that we've cleaned up our data, let's break our training dataset into its own
+training set (60% of the data) and a validation set (40% of the data.).  We'll also
+set our seed to 5132 to ensure reproducibility.
+
+```{r}
+set.seed(5132)
+inTrain <- createDataPartition(train$classe, p = .6, list = FALSE)
+trainMod <- train[inTrain,]
+validMod <- train[-inTrain,]
+```
+
+To hasten the time it takes to prepare our model, we will only run a 5-fold cross
+validation.  Due to its accuracy, we will use Random Forest as our learning method.
+
+```{r model, cache=TRUE, warning=FALSE}
+modControl = trainControl(method = "cv", number = 5)
+modFit = train(classe ~ ., method="rf", data=trainMod, trControl = modControl)
+```
+
+## Error Rate on Training Data
+
+After fitting our model, lets check to see how well we perform against our validation
+dataset and how well our model performs against the training set..
+
+The out of bag error rate is about 1% and our accuracy is about 99%.  So our expectations
+based on how well this model fits our test data lines up with how well it performed
+against our validation data set as well.  We expect that when running this model against
+future data our out of sample error rate will also be around 1%.
+
+```{r fit, cache=TRUE, warning=FALSE}
+print(modFit$finalModel)
+validPred = predict(modFit, validMod)
+confusionMatrix(validPred, validMod$classe)
+```
+
+## Test Prediction File Creation
+
+To wrap up this document, we will provide the code that we'll use to generate text
+files for our predictions on the test dataset.
+
+```{r, warning=FALSE}
+testPred = predict(modFit, test)
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files(testPred)
+```
+
+#### Required Packages
+* caret_6.0-58
+
+## Citations
+
+I'd like to thank Groupware for making their data available for this project.
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative 
+Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International 
+Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: 
+ACM SIGCHI, 2013.
+
+[Read more](http://groupware.les.inf.puc-rio.br/har#sbia_paper_section#ixzz3roEmM399)
